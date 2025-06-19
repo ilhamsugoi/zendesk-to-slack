@@ -1,8 +1,6 @@
 import os
 import requests
 from flask import Flask, request
-import pytz
-from datetime import datetime
 
 app = Flask(__name__)
 
@@ -10,7 +8,6 @@ ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL")
 ZENDESK_TOKEN = os.getenv("ZENDESK_TOKEN")
 ZENDESK_DOMAIN = os.getenv("ZENDESK_DOMAIN")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
-JAKARTA_TZ = pytz.timezone("Asia/Jakarta")
 
 def zendesk_auth():
     return (f"{ZENDESK_EMAIL}/token", ZENDESK_TOKEN)
@@ -60,21 +57,12 @@ def zendesk_webhook():
         ]
 
         for c in comments:
-            waktu_utc = c.get("created_at", "")
-            waktu_jakarta = waktu_utc
-            try:
-                dt_utc = datetime.strptime(waktu_utc, "%Y-%m-%dT%H:%M:%SZ")
-                dt_jkt = dt_utc.replace(tzinfo=pytz.UTC).astimezone(JAKARTA_TZ)
-                waktu_jakarta = dt_jkt.strftime("%d-%m-%Y %H:%M")
-            except Exception as e:
-                print("Error convert waktu:", e)
-
             text = c.get("plain_body", "")
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"({waktu_jakarta} WIB):\n{text}"
+                    "text": text
                 }
             })
             for att in c.get("attachments", []):
