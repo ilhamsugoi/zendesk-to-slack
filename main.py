@@ -1,6 +1,8 @@
 import os
 import requests
 from flask import Flask, request
+import pytz
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -8,24 +10,23 @@ ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL")
 ZENDESK_TOKEN = os.getenv("ZENDESK_TOKEN")
 ZENDESK_DOMAIN = os.getenv("ZENDESK_DOMAIN")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+JAKARTA_TZ = pytz.timezone("Asia/Jakarta")
 
 def zendesk_auth():
     return (f"{ZENDESK_EMAIL}/token", ZENDESK_TOKEN)
 
-def get_ticket_comments(ticket_id):
-    url = f"https://{ZENDESK_DOMAIN}/api/v2/tickets/{ticket_id}/comments.json"
-    resp = requests.get(url, auth=zendesk_auth())
-    if resp.status_code != 200:
-        print("Failed to get comments", resp.text)
-        return []
-    return resp.json().get("comments", [])
-
-def get_author_name(author_id):
+def get_author_name(author_id, requester_name):
     url = f"https://{ZENDESK_DOMAIN}/api/v2/users/{author_id}.json"
     resp = requests.get(url, auth=zendesk_auth())
-    if resp.status_code != 200:
-        return f"User {author_id}"
-    return resp.json()["user"].get("name", f"User {author_id}")
+    if resp.status_code == 200:
+        data = resp.json()["user"]
+        if data.get("role") in ["admin", "agent"]:
+            return data.get("name", requester_name)
+        else:
+            return requester_name
+    else:
+        print(f"Failed to get user for author_id {author_id}: {resp.text}")
+        return requester_name
 
 @app.route('/zendesk-webhook', methods=['POST'])
 def zendesk_webhook():
@@ -45,15 +46,20 @@ def zendesk_webhook():
         requester_phone = requester.get("phone", "-")
         channel = via.get("channel", "-")
 
-        # --- Fetch all comments & attachments ---
-        comments = get_ticket_comments(ticket_id)
+        ticket_link = f"https://{ZENDESK_DOMAIN}/agent/tickets/{ticket_id}"
+        ticket_id_md = f"<{ticket_link}|{ticket_id}>"
+
+        # Fetch comments
+        comments_url = f"https://{ZENDESK_DOMAIN}/api/v2/tickets/{ticket_id}/comments.json"
+        resp = requests.get(comments_url, auth=zendesk_auth())
+        comments = resp.json().get("comments", []) if resp.status_code == 200 else []
 
         blocks = [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Ticket ID:* {ticket_id}\n"
+                    "text": f"*Ticket ID:* {ticket_id_md}\n"
                             f"*Subject:* {subject}\n"
                             f"*Status:* {status}\n"
                             f"*Requester:* {requester_name}\n"
@@ -71,18 +77,25 @@ def zendesk_webhook():
         for c in comments:
             author_id = c.get("author_id")
             if author_id not in author_cache:
-                author_cache[author_id] = get_author_name(author_id)
+                author_cache[author_id] = get_author_name(author_id, requester_name)
             author = author_cache[author_id]
+            waktu_utc = c.get("created_at", "")
+            waktu_jakarta = waktu_utc
+            try:
+                dt_utc = datetime.strptime(waktu_utc, "%Y-%m-%dT%H:%M:%SZ")
+                dt_jkt = dt_utc.replace(tzinfo=pytz.UTC).astimezone(JAKARTA_TZ)
+                waktu_jakarta = dt_jkt.strftime("%d-%m-%Y %H:%M")
+            except Exception as e:
+                print("Error convert waktu:", e)
+
             text = c.get("plain_body", "")
-            waktu = c.get("created_at", "")
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{author}* ({waktu}):\n{text}"
+                    "text": f"*{author}* ({waktu_jakarta} WIB):\n{text}"
                 }
             })
-            # Lampirkan semua attachment pada comment ini
             for att in c.get("attachments", []):
                 blocks.append({
                     "type": "image",
