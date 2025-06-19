@@ -15,20 +15,6 @@ JAKARTA_TZ = pytz.timezone("Asia/Jakarta")
 def zendesk_auth():
     return (f"{ZENDESK_EMAIL}/token", ZENDESK_TOKEN)
 
-def get_author_name(author_id, requester_id, requester_name):
-    # Jika author adalah customer
-    if str(author_id) == str(requester_id):
-        return requester_name
-    # Jika agent/admin, ambil dari API
-    url = f"https://{ZENDESK_DOMAIN}/api/v2/users/{author_id}.json"
-    resp = requests.get(url, auth=zendesk_auth())
-    if resp.status_code == 200:
-        data = resp.json()["user"]
-        return data.get("name", "Grivy")
-    else:
-        print(f"Failed to get user for author_id {author_id}: {resp.text}")
-        return "Grivy"
-
 @app.route('/zendesk-webhook', methods=['POST'])
 def zendesk_webhook():
     try:
@@ -42,7 +28,6 @@ def zendesk_webhook():
         status = ticket.get("status", "-")
         requester = ticket.get("requester", {})
         via = ticket.get("via", {})
-        requester_id = str(requester.get("id", ""))
         requester_name = requester.get("name", "-")
         requester_email = requester.get("email", "-")
         requester_phone = requester.get("phone", "-")
@@ -74,20 +59,7 @@ def zendesk_webhook():
             {"type": "header", "text": {"type": "plain_text", "text": "Percakapan Tiket"}}
         ]
 
-        author_cache = {}
-
         for c in comments:
-            author_id = str(c.get("author_id"))
-            if author_id not in author_cache:
-                author_cache[author_id] = get_author_name(author_id, requester_id, requester_name)
-            author = author_cache[author_id]
-            is_customer = (author_id == requester_id)
-            # Buat nama dengan emoji warna sesuai peran
-            if is_customer:
-                author_md = f"*:blue_circle: {author}*"
-            else:
-                author_md = f"*:orange_circle: {author}*"
-
             waktu_utc = c.get("created_at", "")
             waktu_jakarta = waktu_utc
             try:
@@ -102,7 +74,7 @@ def zendesk_webhook():
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"{author_md} ({waktu_jakarta} WIB):\n{text}"
+                    "text": f"({waktu_jakarta} WIB):\n{text}"
                 }
             })
             for att in c.get("attachments", []):
